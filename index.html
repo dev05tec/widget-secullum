@@ -48,7 +48,9 @@
       const getInternalButton = () =>
         root.shadowRoot.querySelector("#tiflux-widget-app > button");
 
+      let observer;
       const syncWidget = () => {
+        observer?.disconnect();
         const button = getInternalButton();
         const app = root.shadowRoot.querySelector("#tiflux-widget-app");
         const widgetPage = app?.querySelector(":scope > div");
@@ -87,12 +89,15 @@
               button.style.setProperty("display", "none", "important");
             });
         }
+        observer?.observe(root.shadowRoot, {
+          childList: true, subtree: true, attributes: true, attributeFilter: ["style", "class"],
+        });
       };
 
       window.addEventListener("resize", syncWidget);
       window.visualViewport?.addEventListener("resize", syncWidget);
 
-      const observer = new MutationObserver(syncWidget);
+      observer = new MutationObserver(syncWidget);
 
       observer.observe(root.shadowRoot, {
         childList: true,
@@ -119,7 +124,6 @@
       let recordedChunks = [];
       let recordedBytes = 0;
       let pendingAudio;
-      const audioHistory = [];
       const MIC_ICON = '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"></rect><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"></path></svg>';
       const STOP_ICON = '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"></rect></svg>';
       let widgetRoot;
@@ -129,6 +133,7 @@
       let transcriptionRouteAvailable;
       let routeCheckStarted = false;
       const processedAudioTxtLinks = new WeakSet();
+      const processedLegacyAudioMessages = new WeakSet();
 
       const findEditor = () => widgetShadow?.querySelector('[contenteditable="true"]');
       const findStatus = () => widgetShadow?.querySelector("#tiflux-transcription-status");
@@ -244,6 +249,14 @@
           cursor: "pointer",
         });
         deleteButton.addEventListener("click", () => {
+          if (pendingAudio?.file) {
+            const filename = pendingAudio.file.name;
+            const chip = [...widgetShadow.querySelectorAll("span")]
+              .find((element) => element.textContent === filename && !preview.contains(element));
+            const removeButton = chip?.parentElement?.parentElement?.querySelector("button");
+            if (removeButton?.disabled) return;
+            removeButton?.click();
+          }
           if (pendingAudio?.url) URL.revokeObjectURL(pendingAudio.url);
           pendingAudio = undefined;
           preview.remove();
@@ -259,54 +272,17 @@
         return pendingAudio;
       };
 
-      const renderHistoryAudio = () => {
-        if (!widgetShadow) return;
-        for (const item of audioHistory) {
-          if (item.player?.isConnected) continue;
-          const normalizeMessage = (value) => value.replace(/\s+/g, " ").trim();
-          const expectedMessages = [item.text, item.transcript]
-            .filter(Boolean)
-            .map(normalizeMessage);
-          const candidates = [...widgetShadow.querySelectorAll("*")].filter((element) =>
-            element.childElementCount === 0 &&
-            expectedMessages.includes(normalizeMessage(element.textContent || "")) &&
-            !element.isContentEditable &&
-            !element.closest("#tiflux-transcription-status, #tiflux-audio-preview, [contenteditable='true']")
-          );
-          const textNode = candidates[candidates.length - 1];
-          if (!textNode) continue;
-
-          let bubble = textNode;
-          for (let level = 0; level < 6 && bubble; level += 1) {
-            const radius = bubble instanceof HTMLElement ? getComputedStyle(bubble).borderRadius : "0px";
-            if (bubble !== textNode && radius && radius !== "0px") break;
-            bubble = bubble.parentElement;
-          }
-          if (!bubble) bubble = textNode.parentElement;
-          if (!bubble) continue;
-
-          const playerBubble = document.createElement("div");
-          playerBubble.setAttribute("role", "group");
-          playerBubble.setAttribute("aria-label", "Mensagem de áudio transcrita");
-          Object.assign(playerBubble.style, {
-            display: "block", width: "240px", maxWidth: "100%", minWidth: "0",
-            boxSizing: "border-box", lineHeight: "normal",
-          });
-
-          const audio = document.createElement("audio");
-          audio.src = item.url;
-          audio.controls = true;
-          audio.setAttribute("controls", "");
-          audio.preload = "metadata";
-          for (const [property, value] of Object.entries({
-            display: "block", visibility: "visible", opacity: "1", width: "100%",
-            maxWidth: "100%", minWidth: "0", height: "40px", margin: "0",
-          })) audio.style.setProperty(property, value, "important");
-          playerBubble.appendChild(audio);
-
-          textNode.replaceWith(playerBubble);
-          item.player = playerBubble;
-        }
+      const attachAudioText = async (file) => {
+        const input = widgetShadow?.querySelector('input[type="file"]');
+        if (!input) throw new Error("Não encontrei o campo de anexos do widget.");
+        const transfer = new DataTransfer();
+        transfer.items.add(file);
+        input.files = transfer.files;
+        input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
+        await new Promise((resolve) => requestAnimationFrame(resolve));
+        const queued = [...widgetShadow.querySelectorAll("span")]
+          .some((element) => element.textContent === file.name);
+        if (!queued) throw new Error("O widget não incluiu o áudio nos anexos. Verifique o limite de arquivos e tente novamente.");
       };
 
       const transcribeAudio = async (blob, filename) => {
@@ -360,11 +336,15 @@
               `BASE64: ${base64}`,
             ].join("\n");
             if (pendingAudio === localPreview) {
-              localPreview.text = message;
+              const file = new File([message], `a_${Date.now()}.txt`, { type: "text/plain" });
+              setEditorValue("");
+              localPreview.file = file;
+              await attachAudioText(file);
+              if (pendingAudio !== localPreview) return;
+              localPreview.ready = true;
               localPreview.transcript = transcript;
-              localPreview.editorContainer.hidden = true;
+              localPreview.editorContainer.hidden = false;
               localPreview.preview.querySelector("span").title = "O áudio e a transcrição serão enviados ao Tiflux; no widget, a mensagem será exibida como áudio.";
-              setEditorValue(message);
               setStatus("");
             }
           } catch (error) {
@@ -372,6 +352,35 @@
           }
         } else {
           disableAudioButton();
+        }
+      };
+
+      // Recupera mensagens do formato antigo que foram enviadas no corpo do chat.
+      const renderLegacyAudioMessages = () => {
+        if (!widgetShadow) return;
+        for (const element of [...widgetShadow.querySelectorAll("p, span")].reverse()) {
+          if (processedLegacyAudioMessages.has(element) ||
+              element.closest("[contenteditable], #tiflux-audio-preview, [data-tiflux-audio-player]")) continue;
+          const text = element.innerText || element.textContent || "";
+          const match = text.trim().match(/^TIFLUX_?AUDIO_?V2\s+MIME: ([^\r\n]+)\r?\nFILENAME: [^\r\n]+\r?\nTRANSCRIPT_?BASE64: [A-Za-z0-9+/=]*\r?\nBASE64: ([A-Za-z0-9+/=\s]+)$/);
+          if (!match || !/^audio\/[a-z0-9.+-]+$/i.test(match[1].trim())) continue;
+          try {
+            const binary = atob(match[2].replace(/\s/g, ""));
+            if (!binary.length || binary.length > MAX_AUDIO_BYTES) continue;
+            const audio = document.createElement("audio");
+            audio.setAttribute("data-tiflux-audio-player", "");
+            audio.controls = true;
+            audio.preload = "metadata";
+            audio.src = URL.createObjectURL(new Blob([
+              Uint8Array.from(binary, (character) => character.charCodeAt(0)),
+            ], { type: match[1].trim() }));
+            Object.assign(audio.style, { width: "240px", maxWidth: "100%", height: "36px" });
+            processedLegacyAudioMessages.add(element);
+            element.style.setProperty("display", "none", "important");
+            element.insertAdjacentElement("afterend", audio);
+          } catch {
+            // Mantém a mensagem original quando o conteúdo não é um áudio válido.
+          }
         }
       };
 
@@ -386,7 +395,7 @@
           } catch {
             continue;
           }
-          if (url.protocol !== "https:" || !url.pathname.toLowerCase().endsWith(".txt")) continue;
+          if (url.protocol !== "https:" || url.hostname !== "uploads-tiflux.s3.amazonaws.com" || !url.pathname.toLowerCase().endsWith(".txt")) continue;
 
           processedAudioTxtLinks.add(link);
           const playerBubble = document.createElement("div");
@@ -400,7 +409,8 @@
           const loading = document.createElement("span");
           loading.textContent = "Carregando áudio…";
           playerBubble.appendChild(loading);
-          link.replaceWith(playerBubble);
+          link.insertAdjacentElement("afterend", playerBubble);
+          link.style.setProperty("display", "none", "important");
 
           try {
             const response = await fetch(`${transcriptionApiBase}/api/audio-from-txt`, {
@@ -423,8 +433,8 @@
             playerBubble.replaceChildren(label, audio);
             playerBubble.setAttribute("aria-label", "Arquivo de áudio");
           } catch {
-            playerBubble.setAttribute("aria-label", "Áudio indisponível");
-            loading.textContent = "Áudio indisponível";
+            playerBubble.remove();
+            link.style.removeProperty("display");
           }
         }
       };
@@ -435,6 +445,7 @@
         if (!shadow) return false;
         widgetRoot = root;
         widgetShadow = shadow;
+        renderLegacyAudioMessages();
         processAudioTxtLinks();
 
         const sendButton = shadow.querySelector('button[aria-label="Enviar mensagem"]');
@@ -488,6 +499,10 @@
           if (recorder?.state === "recording") {
             recorder.stop();
             setButtonState(false, true);
+            return;
+          }
+          if (pendingAudio) {
+            setStatus("Envie ou exclua o áudio atual antes de gravar outro.");
             return;
           }
           if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
@@ -547,34 +562,24 @@
         return true;
       };
 
-      const prepareTranscriptForWidgetSend = (event) => {
-        const clicked = event.target instanceof Element
-          ? event.target.closest('button[aria-label="Enviar mensagem"]')
-          : null;
-        if (!clicked || !pendingAudio) return;
-        if (!pendingAudio.text) {
-          URL.revokeObjectURL(pendingAudio.url);
-          pendingAudio.preview.remove();
-          pendingAudio.editorContainer.hidden = false;
-          pendingAudio = undefined;
+      const prepareAudioForWidgetSend = (event) => {
+        const target = event.target instanceof Element ? event.target : null;
+        const sending = event.type === "click"
+          ? target?.closest('button[aria-label="Enviar mensagem"]')
+          : event.key === "Enter" && !event.shiftKey && target?.closest('[contenteditable="true"]');
+        if (!sending || !pendingAudio) return;
+        if (!pendingAudio.ready) {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          setStatus("Aguarde o processamento do áudio antes de enviar.");
           return;
         }
-
-        const audio = pendingAudio;
-        audio.editorContainer.hidden = false;
-        audio.preview.remove();
+        if (event.type === "click" && sending.disabled) return;
+        pendingAudio.preview.remove();
+        URL.revokeObjectURL(pendingAudio.url);
         pendingAudio = undefined;
-        audioHistory.push({
-          text: audio.text,
-          transcript: audio.transcript || "",
-          url: audio.url,
-        });
-        setEditorValue(audio.text);
         setStatus("");
-        renderHistoryAudio();
-        for (const delay of [100, 300, 700, 1500, 3000]) {
-          setTimeout(renderHistoryAudio, delay);
-        }
+        // O widget envia o arquivo já incluído na fila nativa de anexos.
       };
 
       const checkTranscriptionRoute = async () => {
@@ -600,13 +605,12 @@
         setUpControls();
         if (sendCaptureShadow !== shadow) {
           sendCaptureShadow = shadow;
-          shadow.addEventListener("click", prepareTranscriptForWidgetSend, true);
+          shadow.addEventListener("click", prepareAudioForWidgetSend, true);
+          shadow.addEventListener("keydown", prepareAudioForWidgetSend, true);
         }
         if (!widgetObserver) {
           widgetObserver = new MutationObserver(() => {
             setUpControls();
-            renderHistoryAudio();
-            processAudioTxtLinks();
           });
           widgetObserver.observe(shadow, { childList: true, characterData: true, subtree: true });
         }
