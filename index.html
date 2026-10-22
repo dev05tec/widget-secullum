@@ -183,6 +183,22 @@
         return editor;
       };
 
+      const blobToBase64 = (blob) => new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(String(reader.result).split(",", 2)[1] || "");
+        reader.onerror = () => reject(new Error("Não foi possível preparar o TXT do áudio."));
+        reader.readAsDataURL(blob);
+      });
+
+      const textToBase64 = (text) => {
+        const bytes = new TextEncoder().encode(text);
+        let binary = "";
+        for (let offset = 0; offset < bytes.length; offset += 0x8000) {
+          binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
+        }
+        return btoa(binary);
+      };
+
       const showAudioPreview = (blob, text, hideEditor = true) => {
         const editor = findEditor();
         const editorContainer = editor?.parentElement;
@@ -332,13 +348,27 @@
           return;
         }
         if (payload.text?.trim()) {
-          const message = `[Widget - Transcrição de áudio]\n\n${payload.text.trim()}`;
-          if (pendingAudio === localPreview) {
-            localPreview.text = message;
-            localPreview.editorContainer.hidden = true;
-            localPreview.preview.querySelector("span").title = "O botão Enviar mensagem enviará a transcrição do áudio.";
-            setEditorValue(message);
-            setStatus("");
+          try {
+            const transcript = payload.text.trim();
+            const mime = (blob.type || "audio/webm").split(";", 1)[0].toLowerCase();
+            const base64 = await blobToBase64(blob);
+            const message = [
+              "TIFLUX_AUDIO_V2",
+              `MIME: ${mime}`,
+              `FILENAME: ${uploadFilename}`,
+              `TRANSCRIPT_BASE64: ${textToBase64(transcript)}`,
+              `BASE64: ${base64}`,
+            ].join("\n");
+            if (pendingAudio === localPreview) {
+              localPreview.text = message;
+              localPreview.transcript = transcript;
+              localPreview.editorContainer.hidden = true;
+              localPreview.preview.querySelector("span").title = "O áudio e a transcrição serão enviados ao Tiflux; no widget, a mensagem será exibida como áudio.";
+              setEditorValue(message);
+              setStatus("");
+            }
+          } catch (error) {
+            setStatus(error.message || "Não foi possível preparar o TXT do áudio.");
           }
         } else {
           disableAudioButton();
@@ -536,7 +566,7 @@
         pendingAudio = undefined;
         audioHistory.push({
           text: audio.text,
-          transcript: audio.text.replace(/^\[Widget - Transcrição de áudio\]\s*/, "").trim(),
+          transcript: audio.transcript || "",
           url: audio.url,
         });
         setEditorValue(audio.text);
