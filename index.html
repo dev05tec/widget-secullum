@@ -383,33 +383,41 @@
           if (url.protocol !== "https:" || !url.pathname.toLowerCase().endsWith(".txt")) continue;
 
           processedAudioTxtLinks.add(link);
+          let bubble = link;
+          for (let level = 0; level < 6 && bubble; level += 1) {
+            const radius = bubble instanceof HTMLElement ? getComputedStyle(bubble).borderRadius : "0px";
+            if (bubble !== link && radius && radius !== "0px") break;
+            bubble = bubble.parentElement;
+          }
+          if (!bubble) bubble = link.parentElement;
+          if (!bubble) continue;
+
+          const playerBubble = document.createElement("div");
+          playerBubble.setAttribute("role", "group");
+          playerBubble.setAttribute("aria-label", "Áudio carregando");
+          Object.assign(playerBubble.style, {
+            display: "flex", alignItems: "center", gap: "8px", width: "min(260px, 100%)",
+            boxSizing: "border-box", padding: "7px 9px", marginTop: "4px",
+            border: "1px solid #e1e1e1", borderRadius: "9px", background: "#fff",
+            color: "#5d5d5d", font: "13px Arial, sans-serif",
+          });
+          const loading = document.createElement("span");
+          loading.textContent = "◌ Carregando áudio…";
+          playerBubble.appendChild(loading);
+          link.hidden = true;
+          bubble.appendChild(playerBubble);
+          bubble.style.setProperty("background-color", "#fff", "important");
+          bubble.style.setProperty("color", "#5d5d5d", "important");
+          bubble.style.setProperty("border", "1px solid #e1e1e1", "important");
+
           try {
             const response = await fetch(`${transcriptionApiBase}/api/audio-from-txt`, {
               method: "POST",
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ url: url.href }),
             });
-            if (!response.ok) continue;
+            if (!response.ok) throw new Error("Não foi possível carregar o áudio.");
             const blob = await response.blob();
-
-            let bubble = link;
-            for (let level = 0; level < 6 && bubble; level += 1) {
-              const radius = bubble instanceof HTMLElement ? getComputedStyle(bubble).borderRadius : "0px";
-              if (bubble !== link && radius && radius !== "0px") break;
-              bubble = bubble.parentElement;
-            }
-            if (!bubble) bubble = link.parentElement;
-            if (!bubble) continue;
-
-            const playerBubble = document.createElement("div");
-            playerBubble.setAttribute("role", "group");
-            playerBubble.setAttribute("aria-label", "Arquivo de áudio");
-            Object.assign(playerBubble.style, {
-              display: "flex", alignItems: "center", gap: "8px", width: "min(260px, 100%)",
-              boxSizing: "border-box", padding: "7px 9px", marginTop: "4px",
-              border: "1px solid #e1e1e1", borderRadius: "9px", background: "#fff",
-              color: "#5d5d5d", font: "13px Arial, sans-serif",
-            });
             const label = document.createElement("span");
             label.textContent = "Áudio";
             const audio = document.createElement("audio");
@@ -417,14 +425,11 @@
             audio.controls = true;
             audio.preload = "metadata";
             Object.assign(audio.style, { width: "190px", height: "34px", filter: "grayscale(1)" });
-            playerBubble.append(label, audio);
-            link.hidden = true;
-            bubble.appendChild(playerBubble);
-            bubble.style.setProperty("background-color", "#fff", "important");
-            bubble.style.setProperty("color", "#5d5d5d", "important");
-            bubble.style.setProperty("border", "1px solid #e1e1e1", "important");
+            playerBubble.replaceChildren(label, audio);
+            playerBubble.setAttribute("aria-label", "Arquivo de áudio");
           } catch {
-            // Links que não contêm um áudio TIFLUX válido permanecem como estão.
+            playerBubble.setAttribute("aria-label", "Áudio indisponível");
+            loading.textContent = "Áudio indisponível";
           }
         }
       };
