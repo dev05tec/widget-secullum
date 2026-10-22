@@ -142,7 +142,7 @@
         if (!button) return;
         button.disabled = busy;
         button.innerHTML = busy ? "…" : recording ? STOP_ICON : MIC_ICON;
-        button.title = busy ? "Transcrevendo áudio…" : recording ? "Parar gravação" : "Gravar áudio";
+        button.title = busy ? "Processando áudio…" : recording ? "Parar gravação" : "Gravar áudio";
         button.setAttribute("aria-label", button.title);
         button.setAttribute("aria-pressed", String(recording));
         button.style.background = "transparent";
@@ -257,10 +257,9 @@
           playerBubble.setAttribute("role", "group");
           playerBubble.setAttribute("aria-label", "Mensagem de áudio transcrita");
           Object.assign(playerBubble.style, {
-            display: "flex", alignItems: "center", gap: "8px", width: "min(260px, 100%)",
-            boxSizing: "border-box", padding: "7px 9px", marginTop: "4px",
-            border: "1px solid #e1e1e1", borderRadius: "9px", background: "#fff",
-            color: "#5d5d5d", font: "13px Arial, sans-serif",
+            display: "flex", alignItems: "center", gap: "8px", width: "100%", maxWidth: "100%",
+            minWidth: "0", boxSizing: "border-box", color: "#5d5d5d",
+            font: "13px Arial, sans-serif",
           });
 
           const label = document.createElement("span");
@@ -271,14 +270,10 @@
           audio.src = item.url;
           audio.controls = true;
           audio.preload = "metadata";
-          Object.assign(audio.style, { width: "190px", height: "34px", filter: "grayscale(1)" });
+          Object.assign(audio.style, { display: "block", width: "min(190px, 100%)", maxWidth: "100%", minWidth: "0", height: "34px", filter: "grayscale(1)" });
           playerBubble.append(label, audio);
 
-          textNode.hidden = true;
-          bubble.style.setProperty("background-color", "#fff", "important");
-          bubble.style.setProperty("color", "#5d5d5d", "important");
-          bubble.style.setProperty("border", "1px solid #e1e1e1", "important");
-          bubble.appendChild(playerBubble);
+          textNode.replaceWith(playerBubble);
           item.player = playerBubble;
         }
       };
@@ -289,7 +284,7 @@
           throw new Error("O áudio excede o limite de 4 MB. Escolha um arquivo menor ou grave um trecho mais curto.");
         }
         const localPreview = showAudioPreview(blob, "", false);
-        setStatus("Transcrevendo áudio…");
+        setStatus("");
         const formData = new FormData();
         const mimeType = (blob.type || "audio/webm").split(";", 1)[0].toLowerCase();
         const extension = mimeType.includes("ogg") ? "ogg"
@@ -499,7 +494,6 @@
             return;
           }
           setButtonState(false, true);
-          setStatus(`Transcrevendo ${file.name}…`);
           try {
             const audio = isTxt
               ? await readStructuredAudioTxt(file)
@@ -537,7 +531,6 @@
           if (recorder?.state === "recording") {
             recorder.stop();
             setButtonState(false, true);
-            setStatus("Transcrevendo gravação…");
             return;
           }
           if (!navigator.mediaDevices?.getUserMedia || !window.MediaRecorder) {
@@ -649,7 +642,7 @@
             renderHistoryAudio();
             processAudioTxtLinks();
           });
-          widgetObserver.observe(shadow, { childList: true, subtree: true });
+          widgetObserver.observe(shadow, { childList: true, characterData: true, subtree: true });
         }
         return true;
       };
