@@ -133,6 +133,11 @@
       let transcriptionRouteAvailable;
       let routeCheckStarted = false;
       const processedAudioTxtLinks = new WeakSet();
+      const sentAudioUrls = new Map();
+      const audioUploadHosts = new Set([
+        "uploads-tiflux.s3.amazonaws.com",
+        "uploads-tiflux.s3.sa-east-1.amazonaws.com",
+      ]);
       const processedLegacyAudioMessages = new WeakSet();
 
       const findEditor = () => widgetShadow?.querySelector('[contenteditable="true"]');
@@ -256,6 +261,7 @@
             const removeButton = chip?.parentElement?.parentElement?.querySelector("button");
             if (removeButton?.disabled) return;
             removeButton?.click();
+            sentAudioUrls.delete(filename);
           }
           if (pendingAudio?.url) URL.revokeObjectURL(pendingAudio.url);
           pendingAudio = undefined;
@@ -281,8 +287,10 @@
         input.dispatchEvent(new Event("change", { bubbles: true, composed: true }));
         await new Promise((resolve) => requestAnimationFrame(resolve));
         const queued = [...widgetShadow.querySelectorAll("span")]
-          .some((element) => element.textContent === file.name);
+          .find((element) => element.textContent === file.name);
         if (!queued) throw new Error("O widget não incluiu o áudio nos anexos. Verifique o limite de arquivos e tente novamente.");
+        // O preview de áudio já fornece reprodução e exclusão do anexo.
+        queued.parentElement?.parentElement?.style.setProperty("display", "none", "important");
       };
 
       const transcribeAudio = async (blob, filename) => {
@@ -336,7 +344,7 @@
               `BASE64: ${base64}`,
             ].join("\n");
             if (pendingAudio === localPreview) {
-              const file = new File([message], `a_${Date.now()}.txt`, { type: "text/plain" });
+              const file = new File([message], `audio_${Date.now().toString(36)}.txt`, { type: "text/plain" });
               setEditorValue("");
               localPreview.file = file;
               await attachAudioText(file);
@@ -395,7 +403,10 @@
           } catch {
             continue;
           }
-          if (url.protocol !== "https:" || url.hostname !== "uploads-tiflux.s3.amazonaws.com" || !url.pathname.toLowerCase().endsWith(".txt")) continue;
+          if (url.protocol !== "https:" || !audioUploadHosts.has(url.hostname) || url.port) continue;
+          let filename;
+          try { filename = decodeURIComponent(url.pathname.split("/").pop()); } catch { continue; }
+          if (!/^(?:audio_|a_).*\.txt$/i.test(filename)) continue;
 
           processedAudioTxtLinks.add(link);
           const playerBubble = document.createElement("div");
@@ -413,17 +424,23 @@
           link.style.setProperty("display", "none", "important");
 
           try {
-            const response = await fetch(`${transcriptionApiBase}/api/audio-from-txt`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json" },
-              body: JSON.stringify({ url: url.href }),
-            });
-            if (!response.ok) throw new Error("Não foi possível carregar o áudio.");
-            const blob = await response.blob();
+            let audioUrl = sentAudioUrls.get(filename);
+            if (!audioUrl) {
+              const response = await fetch(`${transcriptionApiBase}/api/audio-from-txt`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ url: url.href }),
+              });
+              if (!response.ok) throw new Error("Não foi possível carregar o áudio.");
+              const blob = await response.blob();
+              if (!blob.size) throw new Error("O áudio está vazio.");
+              audioUrl = URL.createObjectURL(blob);
+              sentAudioUrls.set(filename, audioUrl);
+            }
             const label = document.createElement("span");
             label.textContent = "Áudio";
             const audio = document.createElement("audio");
-            audio.src = URL.createObjectURL(blob);
+            audio.src = audioUrl;
             audio.controls = true;
             audio.preload = "metadata";
             Object.assign(audio.style, {
@@ -432,6 +449,10 @@
             });
             playerBubble.replaceChildren(label, audio);
             playerBubble.setAttribute("aria-label", "Arquivo de áudio");
+            if (pendingAudio?.file?.name === filename) {
+              pendingAudio.preview.remove();
+              pendingAudio = undefined;
+            }
           } catch {
             playerBubble.remove();
             link.style.removeProperty("display");
@@ -575,9 +596,7 @@
           return;
         }
         if (event.type === "click" && sending.disabled) return;
-        pendingAudio.preview.remove();
-        URL.revokeObjectURL(pendingAudio.url);
-        pendingAudio = undefined;
+        sentAudioUrls.set(pendingAudio.file.name, pendingAudio.url);
         setStatus("");
         // O widget envia o arquivo já incluído na fila nativa de anexos.
       };
