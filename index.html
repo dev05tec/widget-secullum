@@ -139,6 +139,8 @@
         "uploads-tiflux.s3.sa-east-1.amazonaws.com",
       ]);
       const processedLegacyAudioMessages = new WeakSet();
+      const hiddenTranscriptRows = new Map();
+      const TRANSCRIPT_MESSAGE_PREFIX = "[TIFLUX-AUDIO-TRANSCRIPT V1]";
 
       const findEditor = () => widgetShadow?.querySelector('[contenteditable="true"]');
       const findStatus = () => widgetShadow?.querySelector("#tiflux-transcription-status");
@@ -199,15 +201,6 @@
         reader.onerror = () => reject(new Error("Não foi possível preparar o TXT do áudio."));
         reader.readAsDataURL(blob);
       });
-
-      const textToBase64 = (text) => {
-        const bytes = new TextEncoder().encode(text);
-        let binary = "";
-        for (let offset = 0; offset < bytes.length; offset += 0x8000) {
-          binary += String.fromCharCode(...bytes.subarray(offset, offset + 0x8000));
-        }
-        return btoa(binary);
-      };
 
       const showAudioPreview = (blob, text, hideEditor = true) => {
         const editor = findEditor();
@@ -337,10 +330,9 @@
             const mime = (blob.type || "audio/webm").split(";", 1)[0].toLowerCase();
             const base64 = await blobToBase64(blob);
             const message = [
-              "TIFLUX_AUDIO_V2",
+              "TIFLUX_AUDIO_V1",
               `MIME: ${mime}`,
               `FILENAME: ${uploadFilename}`,
-              `TRANSCRIPT_BASE64: ${textToBase64(transcript)}`,
               `BASE64: ${base64}`,
             ].join("\n");
             if (pendingAudio === localPreview) {
@@ -351,7 +343,7 @@
               if (pendingAudio !== localPreview) return;
               localPreview.ready = true;
               localPreview.transcript = transcript;
-              localPreview.editorContainer.hidden = false;
+              localPreview.editorContainer.hidden = true;
               localPreview.preview.querySelector("span").title = "O áudio e a transcrição serão enviados ao Tiflux; no widget, a mensagem será exibida como áudio.";
               setStatus("");
             }
@@ -360,6 +352,52 @@
           }
         } else {
           disableAudioButton();
+        }
+      };
+
+      const isTranscriptMessage = (text) => text.trimStart().startsWith(TRANSCRIPT_MESSAGE_PREFIX);
+
+      const hideTranscriptMessages = () => {
+        if (!widgetShadow) return;
+        // Restaura uma linha caso o React reutilize seu elemento para outra mensagem.
+        for (const [row, saved] of hiddenTranscriptRows) {
+          if (!row.isConnected) {
+            hiddenTranscriptRows.delete(row);
+          } else if (!saved.content.isConnected || !row.contains(saved.content) ||
+                     !isTranscriptMessage(saved.content.textContent || "")) {
+            if (saved.display) row.style.setProperty("display", saved.display, saved.priority);
+            else row.style.removeProperty("display");
+            hiddenTranscriptRows.delete(row);
+          }
+        }
+        for (const content of widgetShadow.querySelectorAll("p, span")) {
+          if (content.closest("[contenteditable], #tiflux-audio-preview, #tiflux-transcription-status")) continue;
+          if (!isTranscriptMessage(content.textContent || "")) continue;
+          let history = content.closest(".tiflux-chat-messages");
+          // A versão atual de widget.js identifica o histórico apenas pelo estilo.
+          if (!history) {
+            for (let parent = content.parentElement; parent; parent = parent.parentElement) {
+              if (parent.style.overflowY === "auto") { history = parent; break; }
+            }
+          }
+          if (!history) continue;
+          let row = content;
+          // A linha inclui a bolha, o nome e o horário; ocultá-la evita espaços vazios.
+          for (let parent = content.parentElement; parent && parent !== history; parent = parent.parentElement) {
+            if (hiddenTranscriptRows.has(parent) || (parent.style.display === "flex" &&
+                ["flex-start", "flex-end"].includes(parent.style.justifyContent) && parent.style.marginBottom)) {
+              row = parent;
+              break;
+            }
+          }
+          if (!hiddenTranscriptRows.has(row)) {
+            hiddenTranscriptRows.set(row, {
+              content,
+              display: row.style.getPropertyValue("display"),
+              priority: row.style.getPropertyPriority("display"),
+            });
+          }
+          if (row.style.display !== "none") row.style.setProperty("display", "none", "important");
         }
       };
 
@@ -466,6 +504,7 @@
         if (!shadow) return false;
         widgetRoot = root;
         widgetShadow = shadow;
+        hideTranscriptMessages();
         renderLegacyAudioMessages();
         processAudioTxtLinks();
 
@@ -596,7 +635,23 @@
           return;
         }
         if (event.type === "click" && sending.disabled) return;
-        sentAudioUrls.set(pendingAudio.file.name, pendingAudio.url);
+        const audio = pendingAudio;
+        sentAudioUrls.set(audio.file.name, audio.url);
+        if (!audio.transcriptSent && audio.transcript) {
+          const message = `${TRANSCRIPT_MESSAGE_PREFIX}\nArquivo: ${audio.file.name}\n\n${audio.transcript}`;
+          audio.editorContainer.hidden = true;
+          const editor = setEditorValue(message);
+          // O envio nativo lê e limpa o editor antes de iniciar o upload do TXT.
+          queueMicrotask(() => {
+            audio.transcriptSent = !(editor.textContent || "").trim();
+            if (!audio.transcriptSent && editor.textContent === message) {
+              editor.textContent = "";
+              editor.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "deleteContentBackward", data: null }));
+            }
+            audio.editorContainer.hidden = false;
+            hideTranscriptMessages();
+          });
+        }
         setStatus("");
         // O widget envia o arquivo já incluído na fila nativa de anexos.
       };
@@ -629,6 +684,7 @@
         }
         if (!widgetObserver) {
           widgetObserver = new MutationObserver(() => {
+            hideTranscriptMessages();
             setUpControls();
           });
           widgetObserver.observe(shadow, { childList: true, characterData: true, subtree: true });
