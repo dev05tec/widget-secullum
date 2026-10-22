@@ -235,9 +235,13 @@
         if (!widgetShadow) return;
         for (const item of audioHistory) {
           if (item.player?.isConnected) continue;
+          const normalizeMessage = (value) => value.replace(/\s+/g, " ").trim();
+          const expectedMessages = [item.text, item.transcript]
+            .filter(Boolean)
+            .map(normalizeMessage);
           const candidates = [...widgetShadow.querySelectorAll("*")].filter((element) =>
             element.childElementCount === 0 &&
-            element.textContent?.trim() === item.text &&
+            expectedMessages.includes(normalizeMessage(element.textContent || "")) &&
             !element.isContentEditable &&
             !element.closest("#tiflux-transcription-status, #tiflux-audio-preview, [contenteditable='true']")
           );
@@ -593,10 +597,17 @@
         audio.editorContainer.hidden = false;
         audio.preview.remove();
         pendingAudio = undefined;
-        audioHistory.push({ text: audio.text, url: audio.url });
+        audioHistory.push({
+          text: audio.text,
+          transcript: audio.text.replace(/^\[Widget - Transcrição de áudio\]\s*/, "").trim(),
+          url: audio.url,
+        });
         setEditorValue(audio.text);
         setStatus("");
         renderHistoryAudio();
+        for (const delay of [100, 300, 700, 1500, 3000]) {
+          setTimeout(renderHistoryAudio, delay);
+        }
       };
 
       const checkTranscriptionRoute = async () => {
