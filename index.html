@@ -257,21 +257,20 @@
           playerBubble.setAttribute("role", "group");
           playerBubble.setAttribute("aria-label", "Mensagem de áudio transcrita");
           Object.assign(playerBubble.style, {
-            display: "flex", alignItems: "center", gap: "8px", width: "100%", maxWidth: "100%",
-            minWidth: "0", boxSizing: "border-box", color: "#5d5d5d",
-            font: "13px Arial, sans-serif",
+            display: "block", width: "240px", maxWidth: "100%", minWidth: "0",
+            boxSizing: "border-box", lineHeight: "normal",
           });
-
-          const label = document.createElement("span");
-          label.textContent = "Áudio";
-          Object.assign(label.style, { flex: "0 0 auto", color: "#5d5d5d" });
 
           const audio = document.createElement("audio");
           audio.src = item.url;
           audio.controls = true;
+          audio.setAttribute("controls", "");
           audio.preload = "metadata";
-          Object.assign(audio.style, { display: "block", width: "min(190px, 100%)", maxWidth: "100%", minWidth: "0", height: "34px", filter: "grayscale(1)" });
-          playerBubble.append(label, audio);
+          for (const [property, value] of Object.entries({
+            display: "block", visibility: "visible", opacity: "1", width: "100%",
+            maxWidth: "100%", minWidth: "0", height: "40px", margin: "0",
+          })) audio.style.setProperty(property, value, "important");
+          playerBubble.appendChild(audio);
 
           textNode.replaceWith(playerBubble);
           item.player = playerBubble;
