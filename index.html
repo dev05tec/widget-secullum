@@ -52,6 +52,7 @@
         const button = getInternalButton();
         const app = root.shadowRoot.querySelector("#tiflux-widget-app");
         const widgetPage = app?.querySelector(":scope > div");
+        const mobile = window.matchMedia("(max-width: 600px)").matches;
 
         if (button) {
           if (button.style.visibility !== "hidden") {
@@ -64,20 +65,21 @@
         }
 
         if (widgetPage) {
+          const viewportHeight = mobile ? "100dvh" : "80vh";
           root.style.setProperty("position", "fixed", "important");
           root.style.setProperty("inset", "0", "important");
           root.style.setProperty("width", "100vw", "important");
-          root.style.setProperty("height", "100vh", "important");
+          root.style.setProperty("height", mobile ? "100dvh" : "100vh", "important");
 
           widgetPage.style.setProperty("position", "fixed", "important");
-          widgetPage.style.setProperty("top", "50%", "important");
-          widgetPage.style.setProperty("left", "50%", "important");
-          widgetPage.style.setProperty("transform", "translate(-50%, -50%)", "important");
-          widgetPage.style.setProperty("width", "min(80vw, 1400px)", "important");
-          widgetPage.style.setProperty("height", "80vh", "important");
-          widgetPage.style.setProperty("max-width", "1400px", "important");
-          widgetPage.style.setProperty("max-height", "none", "important");
-          widgetPage.style.setProperty("border-radius", "16px", "important");
+          widgetPage.style.setProperty("top", mobile ? "0" : "50%", "important");
+          widgetPage.style.setProperty("left", mobile ? "0" : "50%", "important");
+          widgetPage.style.setProperty("transform", mobile ? "none" : "translate(-50%, -50%)", "important");
+          widgetPage.style.setProperty("width", mobile ? "100vw" : "min(80vw, 1400px)", "important");
+          widgetPage.style.setProperty("height", viewportHeight, "important");
+          widgetPage.style.setProperty("max-width", mobile ? "100vw" : "1400px", "important");
+          widgetPage.style.setProperty("max-height", mobile ? "100dvh" : "none", "important");
+          widgetPage.style.setProperty("border-radius", mobile ? "0" : "16px", "important");
 
           widgetPage
             .querySelectorAll('[aria-label="Recolher"], [aria-label="Fechar"]')
@@ -86,6 +88,9 @@
             });
         }
       };
+
+      window.addEventListener("resize", syncWidget);
+      window.visualViewport?.addEventListener("resize", syncWidget);
 
       const observer = new MutationObserver(syncWidget);
 
@@ -117,7 +122,6 @@
       const audioHistory = [];
       const MIC_ICON = '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="2" width="6" height="12" rx="3"></rect><path d="M5 10v2a7 7 0 0 0 14 0v-2M12 19v3M8 22h8"></path></svg>';
       const STOP_ICON = '<svg aria-hidden="true" width="14" height="14" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="6" width="12" height="12" rx="1"></rect></svg>';
-      const FILE_ICON = '<svg aria-hidden="true" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.82-2.83l8.49-8.48"></path></svg>';
       let widgetRoot;
       let widgetShadow;
       let widgetObserver;
@@ -128,6 +132,11 @@
 
       const findEditor = () => widgetShadow?.querySelector('[contenteditable="true"]');
       const findStatus = () => widgetShadow?.querySelector("#tiflux-transcription-status");
+
+      const disableAudioButton = () => {
+        widgetShadow?.querySelector("#tiflux-record-audio")?.remove();
+        setStatus("");
+      };
 
       const setStatus = (message) => {
         const status = findStatus();
@@ -188,7 +197,7 @@
         const preview = document.createElement("div");
         preview.id = "tiflux-audio-preview";
         Object.assign(preview.style, {
-          display: "flex", alignItems: "center", gap: "10px", width: "100%",
+          display: "flex", flexWrap: "wrap", alignItems: "center", gap: "8px 10px", width: "100%",
           boxSizing: "border-box", padding: "8px 10px", margin: "4px 0 8px",
           border: "1px solid #e1e1e1", borderRadius: "10px", background: "#fff",
         });
@@ -204,7 +213,10 @@
         player.controls = true;
         player.preload = "metadata";
         player.src = url;
-        Object.assign(player.style, { flex: "1 1 auto", minWidth: "80px", maxWidth: "260px", height: "36px" });
+        Object.assign(player.style, {
+          display: "block", flex: "1 1 100%", width: "100%", minWidth: "0",
+          maxWidth: "100%", height: "40px",
+        });
 
         const deleteButton = document.createElement("button");
         deleteButton.type = "button";
@@ -306,7 +318,8 @@
             body: formData,
           });
         } catch {
-          throw new Error("Não foi possível gravar áudio.");
+          disableAudioButton();
+          return;
         }
         let payload = {};
         try {
@@ -315,10 +328,8 @@
           // A mensagem abaixo será escolhida pelo código HTTP.
         }
         if (!response.ok) {
-          if (response.status === 413) {
-            throw new Error(payload.error || "O áudio excede o limite de 4 MB e não foi enviado.");
-          }
-          throw new Error(payload.error || "Não foi possível gravar áudio.");
+          disableAudioButton();
+          return;
         }
         if (payload.text?.trim()) {
           const message = `[Widget - Transcrição de áudio]\n\n${payload.text.trim()}`;
@@ -330,42 +341,9 @@
             setStatus("");
           }
         } else {
-          setStatus("Nenhuma fala foi identificada. Grave ou escolha outro áudio.");
+          disableAudioButton();
         }
       };
-
-      const decodeStructuredAudioTxt = (content) => {
-        if (content.length > Math.ceil(MAX_AUDIO_BYTES * 4 / 3) + 4096) {
-          throw new Error("O áudio excede o limite de 4 MB. Escolha um arquivo menor.");
-        }
-        const match = content.match(/^TIFLUX_AUDIO_V1\r?\nMIME: ([^\r\n]+)\r?\nFILENAME: ([^\r\n]+)\r?\nBASE64: ([\s\S]*)$/);
-        if (!match || !/^audio\/[a-z0-9.+-]+$/i.test(match[1].trim())) {
-          throw new Error("O TXT não segue o formato de áudio TIFLUX_AUDIO_V1.");
-        }
-
-        const mimeType = match[1].trim();
-        const filename = match[2].trim().replace(/[\\/\r\n]/g, "_").slice(0, 120);
-        const base64 = match[3].replace(/\s/g, "");
-        const validBase64 = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/;
-        if (!filename || !base64 || !validBase64.test(base64)) {
-          throw new Error("O TXT não contém um áudio Base64 válido.");
-        }
-
-        try {
-          const binary = atob(base64);
-          if (!binary.length || binary.length > MAX_AUDIO_BYTES) {
-            throw new Error("O áudio excede o limite de 4 MB ou está vazio.");
-          }
-          const bytes = new Uint8Array(binary.length);
-          for (let index = 0; index < binary.length; index += 1) bytes[index] = binary.charCodeAt(index);
-          return { blob: new Blob([bytes], { type: mimeType }), filename };
-        } catch (error) {
-          if (error.message?.includes("limite de 4 MB")) throw error;
-          throw new Error("O TXT não contém um áudio Base64 válido.");
-        }
-      };
-
-      const readStructuredAudioTxt = async (file) => decodeStructuredAudioTxt(await file.text());
 
       const processAudioTxtLinks = async () => {
         if (!widgetShadow) return;
@@ -421,41 +399,28 @@
         }
       };
 
-      const showRouteUnavailableNotice = () => {
-        const sendButton = widgetShadow?.querySelector('button[aria-label="Enviar mensagem"]');
-        const composer = sendButton?.parentElement;
-        if (!composer || composer.querySelector("#tiflux-transcription-unavailable")) return;
-        const notice = document.createElement("div");
-        notice.id = "tiflux-transcription-unavailable";
-        notice.setAttribute("role", "status");
-        notice.textContent = "Transcrição de áudio indisponível no momento.";
-        Object.assign(notice.style, {
-          padding: "6px 0", color: "#5d5d5d", font: "12px Arial, sans-serif",
-        });
-        const editor = findEditor()?.parentElement;
-        if (editor) composer.insertBefore(notice, editor);
-        else composer.appendChild(notice);
-      };
-
       const setUpControls = () => {
-        if (transcriptionRouteAvailable !== true) {
-          if (transcriptionRouteAvailable === false) showRouteUnavailableNotice();
-          return false;
-        }
         const root = document.querySelector("#tiflux-widget-root");
         const shadow = root?.shadowRoot;
         if (!shadow) return false;
         widgetRoot = root;
         widgetShadow = shadow;
         processAudioTxtLinks();
-        shadow.querySelector("#tiflux-transcription-unavailable")?.remove();
 
         const sendButton = shadow.querySelector('button[aria-label="Enviar mensagem"]');
         const editor = findEditor();
         if (!sendButton || !editor) return false;
         const composer = sendButton.parentElement;
-        if (!composer || composer.querySelector("#tiflux-record-audio")) return true;
+        if (!composer) return false;
+        if (transcriptionRouteAvailable === false) {
+          composer.querySelector("#tiflux-record-audio")?.remove();
+          composer.querySelector("#tiflux-transcription-status")?.remove();
+          return true;
+        }
+        if (composer.querySelector("#tiflux-record-audio")) return true;
         composer.style.position = "relative";
+        composer.style.boxSizing = "border-box";
+        composer.style.paddingBottom = "42px";
 
         const status = document.createElement("div");
         status.id = "tiflux-transcription-status";
@@ -469,42 +434,12 @@
         });
         status.hidden = true;
 
-        const fileInput = document.createElement("input");
-        fileInput.id = "tiflux-audio-file";
-        fileInput.type = "file";
-        fileInput.accept = "audio/*,.mp3,.m4a,.wav,.webm,.ogg,.flac,.mpga,audio_*.txt,.txt,text/plain";
-        fileInput.hidden = true;
-        fileInput.addEventListener("change", async () => {
-          const file = fileInput.files?.[0];
-          if (!file) return;
-          const isTxt = file.name.toLowerCase().endsWith(".txt");
-          const supported = ["mp3", "m4a", "wav", "webm", "ogg", "flac", "mpga"];
-          const extension = file.name.split(".").pop()?.toLowerCase();
-          if (!isTxt && !file.type.startsWith("audio/") && !supported.includes(extension)) {
-            setStatus("Selecione um arquivo de áudio compatível.");
-            fileInput.value = "";
-            return;
-          }
-          setButtonState(false, true);
-          try {
-            const audio = isTxt
-              ? await readStructuredAudioTxt(file)
-              : { blob: file, filename: file.name };
-            await transcribeAudio(audio.blob, audio.filename);
-          } catch (error) {
-            setStatus(error.message || "Não foi possível gravar áudio.");
-          } finally {
-            setButtonState(false);
-            fileInput.value = "";
-          }
-        });
-
         const makeButton = (id, label, right) => {
           const button = document.createElement("button");
           button.id = id;
           button.type = "button";
           button.innerHTML = label;
-          button.title = id === "tiflux-record-audio" ? "Gravar áudio" : "Enviar arquivo de áudio";
+          button.title = "Gravar áudio";
           button.setAttribute("aria-label", button.title);
           Object.assign(button.style, {
             position: "absolute", right, bottom: "12px", zIndex: "11",
@@ -574,9 +509,11 @@
           }
         });
 
-        const fileButton = makeButton("tiflux-upload-audio", FILE_ICON, "115px");
-        fileButton.addEventListener("click", () => fileInput.click());
-        composer.append(status, fileInput, fileButton, recordButton);
+        composer.append(status, recordButton);
+        if (transcriptionRouteAvailable === false) {
+          recordButton.remove();
+          status.remove();
+        }
         return true;
       };
 
